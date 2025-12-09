@@ -2,10 +2,6 @@
 
 Open a terminal in the project root:
 
-```bash
-cd "/Users/kabirkhanuja/My_drive/VIT/SY/SEM1/DS/CP/flight-management-system"
-```
-
 1. (Optional) Create and activate a virtual environment
 
 ```bash
