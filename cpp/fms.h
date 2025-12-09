@@ -5,6 +5,7 @@
 #include <stack>
 #include <queue>
 #include <unordered_map>
+#include <utility>
 
 struct BookingNode {
     int bookingId;
@@ -58,6 +59,8 @@ public:
     void primMST(const std::string& start);
     void kruskalMST();
 
+    std::pair<int, std::vector<std::string>> dijkstra_path(const std::string& source, const std::string& dest);
+
 private:
     struct Edge { int u, v, w; };
     struct DSU {
@@ -78,28 +81,47 @@ private:
 class FlightSystem {
 public:
     FlightSystem();
-    // admin
+
     void addFlight();
     void cancelFlight();
     void scheduleFlight();
     void viewFlights();
 
-    // booking flow
     void bookFlight();
     void processNextBooking();
     void cancelBooking();
     void showBookingsForFlight();
 
-    // searches / stack
     void searchFlightsBySource();
     void showRecentSearches();
 
-    // graph algorithms
     void shortestDistanceBetweenAirports();
     void runDFS();
     void runBFS();
     void runPrimMST();
     void runKruskalMST();
+
+    bool addFlightParams(const std::string& flightID,
+                         const std::string& source,
+                         const std::string& destination,
+                         int distance,
+                         int seats);
+
+    std::vector<Flight> listFlights() const;
+
+    bool queueBooking(const std::string& flightID, const std::string& passengerName);
+
+    std::pair<bool, std::string> processNextBookingNonInteractive(const std::string& passengerName);
+
+    bool cancelBookingById(const std::string& flightID, int bookingId);
+
+    std::vector<std::pair<int, std::string>> getBookingsForFlight(const std::string& flightID) const;
+
+    std::vector<Flight> searchFlightsBySourceNonInteractive(const std::string& source);
+
+    std::vector<std::string> recentSearchesList() const;
+
+    std::pair<int, std::vector<std::string>> dijkstraPath(const std::string& src, const std::string& dest);
 
 private:
     Flight flights[MAX_FLIGHTS];

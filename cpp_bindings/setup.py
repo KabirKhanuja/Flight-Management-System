@@ -20,7 +20,7 @@ include_dirs = [
 ext_modules = [
     Extension(
         "flight_fms_cpp",
-        sources=["bindings.cpp", "../cpp/FMS.cpp"],
+        sources=["bindings.cpp", "../cpp/fms_core.cpp"],
         include_dirs=include_dirs,
         language="c++",
         extra_compile_args=["-std=c++17", "-O3"],
