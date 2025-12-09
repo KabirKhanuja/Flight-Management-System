@@ -1,0 +1,28 @@
+### Python virtual environments
+venv/
+.venv/
+env/
+.env/
+
+### Python cache
+__pycache__/
+*.py[cod]
+
+### C++ build outputs
+*.o
+*.obj
+*.exe
+*.out
+*.a
+*.so
+*.dylib
+
+### Local build/temp directories
+build/
+cpp_bindings/build/
+cpp_bindings/*.so
+cpp_bindings/*.dylib
+
+### Editor/OS noise
+.DS_Store
+.vscode/
