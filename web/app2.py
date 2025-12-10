@@ -335,6 +335,23 @@ with st.sidebar:
     active_flights = sum(1 for f in st.session_state.flights if f["active"])
     total_bookings = sum(len(f["bookings"]) for f in st.session_state.flights)
     st.metric("Total confirmed bookings", total_bookings)
+    
+    # Flight image
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    try:
+        from PIL import Image
+        img = Image.open("airplane.jpg")
+        st.image(img, use_container_width=True, caption="")
+        st.markdown("""
+            <style>
+            [data-testid="stSidebar"] img {
+                border-radius: 10px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            </style>
+        """, unsafe_allow_html=True)
+    except:
+        pass
 
 role = st.session_state.role
 
