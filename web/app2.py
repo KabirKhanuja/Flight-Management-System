@@ -1,5 +1,6 @@
 import streamlit as st
 from collections import deque, defaultdict
+from pathlib import Path
 import heapq
 
 st.set_page_config(page_title="Flight Management System (FMS)", layout="wide")
@@ -13,27 +14,74 @@ with header_left:
 with header_right:
     st.selectbox("Role", ["User", "Admin"], key="role")
 
+# ---------- Simple file-based DB ----------
+DB_PATH = Path(__file__).with_name("flights_db.txt")
+
+
+def load_flights_from_db():
+    flights = []
+    if not DB_PATH.exists():
+        return flights
+    with DB_PATH.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            if len(parts) != 6:
+                continue
+            fid, src, dst, dist_str, seats_str, active_str = [p.strip() for p in parts]
+            try:
+                dist = int(dist_str)
+                seats = int(seats_str)
+            except ValueError:
+                continue
+            active = active_str.lower() == "true"
+            flights.append({
+                "flightID": fid,
+                "source": src,
+                "destination": dst,
+                "distance": dist,
+                "seats": seats,
+                "active": active,
+                "bookings": [],
+            })
+    return flights
+
+
+def save_flights_to_db():
+    lines = []
+    for f in st.session_state.flights:
+        line = f"{f['flightID']},{f['source']},{f['destination']},{f['distance']},{f['seats']},{str(f['active'])}"
+        lines.append(line)
+    with DB_PATH.open("w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
 # ---------- Session state init ----------
 if "flights" not in st.session_state:
-    # flights: list of dicts {flightID, source, destination, distance, seats, active, bookings(list of (id,name))}
-    st.session_state.flights = [
-        {"flightID": "F101", "source": "Pune", "destination": "Mumbai", "distance": 150, "seats": 5, "active": True, "bookings": []},
-        {"flightID": "F102", "source": "Delhi", "destination": "Mumbai", "distance": 1400, "seats": 3, "active": True, "bookings": []},
-        {"flightID": "F103", "source": "Pune", "destination": "Bangalore", "distance": 840, "seats": 2, "active": True, "bookings": []},
-    ]
+    loaded = load_flights_from_db()
+    if loaded:
+        st.session_state.flights = loaded
+    else:
+        st.session_state.flights = [
+            {"flightID": "F101", "source": "Pune", "destination": "Mumbai", "distance": 150, "seats": 5, "active": True, "bookings": []},
+            {"flightID": "F102", "source": "Delhi", "destination": "Mumbai", "distance": 1400, "seats": 3, "active": True, "bookings": []},
+            {"flightID": "F103", "source": "Pune", "destination": "Bangalore", "distance": 840, "seats": 2, "active": True, "bookings": []},
+        ]
+        save_flights_to_db()
 if "flight_index" not in st.session_state:
     st.session_state.flight_index = {f["flightID"]: idx for idx, f in enumerate(st.session_state.flights)}
 if "booking_queue" not in st.session_state:
-    st.session_state.booking_queue = deque()  # store flightID entries
+    st.session_state.booking_queue = deque()  
 if "global_booking_id" not in st.session_state:
     st.session_state.global_booking_id = 1
 if "recent_searches" not in st.session_state:
-    st.session_state.recent_searches = []  # stack-like list, top is end
+    st.session_state.recent_searches = []  
 if "graph" not in st.session_state:
     st.session_state.graph = defaultdict(list)
 
 
-# ---------- Helper functions ----------
 def rebuild_graph():
     g = defaultdict(list)
     for f in st.session_state.flights:
@@ -58,6 +106,7 @@ def add_flight_params(fid, src, dst, dist, seats):
     st.session_state.flights.append(f)
     st.session_state.flight_index[fid] = len(st.session_state.flights) - 1
     rebuild_graph()
+    save_flights_to_db()
     return True, "Added"
 
 def list_flights():
@@ -73,6 +122,7 @@ def cancel_flight(fid):
         return False, "Flight is already cancelled."
     f["active"] = False
     rebuild_graph()
+    save_flights_to_db()
     return True, f"Flight {fid} cancelled."
 
 
@@ -85,6 +135,7 @@ def schedule_flight(fid):
         return False, "Flight is already active."
     f["active"] = True
     rebuild_graph()
+    save_flights_to_db()
     return True, f"Flight {fid} scheduled / activated."
 
 def queue_booking(fid, passenger):
@@ -135,13 +186,18 @@ def cancel_booking_by_id(fid, booking_id):
     return False
 
 def search_flights_by_source_noninteractive(src):
+    src_norm = src.strip().lower()
     res = []
-    for f in st.session_state.flights:
-        if f["source"] == src and f["active"]:
-            res.append(f)
-    # push to recent searches
-    if src:
-        st.session_state.recent_searches.append(src)
+    if not src_norm:
+        for f in st.session_state.flights:
+            if f["active"]:
+                res.append(f)
+    else:
+        for f in st.session_state.flights:
+            if f["source"].lower() == src_norm and f["active"]:
+                res.append(f)
+    if src_norm:
+        st.session_state.recent_searches.append(src_norm)
     return res
 
 def recent_searches_list():
