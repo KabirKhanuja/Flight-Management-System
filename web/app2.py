@@ -18,7 +18,7 @@ except Exception:
     flight_fms_cpp = None
 
 st.set_page_config(page_title="Flight Management System (FMS)", layout="wide")
-st.title("Flight Management System — Streamlit UI (Python demo)")
+st.title("Flight Management System")
 
 # ---------- Session state init ----------
 if "flights" not in st.session_state:
@@ -56,7 +56,7 @@ if NONINTERACTIVE:
     st.success("Non-interactive C++ bindings detected. UI will call C++ methods directly.")
 else:
     st.warning(
-        "Non-interactive C++ bindings not found. The UI will use the Python demo backend (hardcoded/sample data)."
+        "Non-interactive C++ bindings not found."
     )
 
 # ---------- Helper functions ----------
@@ -278,7 +278,7 @@ st.markdown("## Flights")
 col1, col2 = st.columns([2, 3])
 
 with col1:
-    st.subheader("Add flight (demo)")
+    st.subheader("Add flight")
     with st.form("add_flight_form"):
         fid = st.text_input("Flight ID", value="F104")
         src = st.text_input("Source", value="Pune")
@@ -421,9 +421,7 @@ with gcol2:
 
 st.markdown("---")
 st.subheader("Developer / CLI fallback")
-st.write("This demo uses in-memory state. To use the real C++ backend, implement non-interactive bindings and rebuild the extension.")
 if st.button("Show CLI run instructions"):
     st.code("cd cpp && mkdir build && cd build && cmake .. && make && ../fms_app")
 
 st.markdown("----")
-st.caption("Streamlit demo — mimics the C++ Flight Management System behavior with hardcoded/sample data.")
