@@ -15,7 +15,7 @@ with header_left:
 with header_right:
     st.selectbox("Role", ["User", "Admin"], key="role")
 
-# ---------- Simple file-based DB ----------
+# DB
 DB_PATH = Path(__file__).with_name("flights_db.txt")
 
 
@@ -232,7 +232,6 @@ def dijkstra_path(src, dest):
                 heapq.heappush(pq, (nd, v))
     if dest not in dist:
         return None, []
-    # reconstruct path
     path = []
     cur = dest
     while cur is not None:
@@ -295,7 +294,6 @@ def prim_mst(start):
     return edges, total
 
 def kruskal_mst():
-    # build edges unique u<v
     graph = st.session_state.graph
     nodes = list(graph.keys())
     idx = {n:i for i,n in enumerate(nodes)}

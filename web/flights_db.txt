@@ -1,3 +1,7 @@
 F101,Pune,Mumbai,150,5,True
 F102,Delhi,Mumbai,1400,3,True
 F103,Pune,Bangalore,840,2,True
+F104,Pune,Goa,400,8,True
+F106,Pune,Delhi,800,10,True
+F107,Pune,Gujarat,200,10,True
+F108,Gujarat,Delhi,200,10,True
