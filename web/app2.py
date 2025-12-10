@@ -2,6 +2,7 @@ import streamlit as st
 from collections import deque, defaultdict
 from pathlib import Path
 import heapq
+import time
 
 st.set_page_config(page_title="Flight Management System (FMS)", layout="wide")
 
@@ -80,6 +81,8 @@ if "recent_searches" not in st.session_state:
     st.session_state.recent_searches = []  
 if "graph" not in st.session_state:
     st.session_state.graph = defaultdict(list)
+if "last_booking_fid" not in st.session_state:
+    st.session_state.last_booking_fid = ""
 
 
 def rebuild_graph():
@@ -409,31 +412,39 @@ if role == "User":
         bcol1, bcol2, bcol3 = st.columns(3)
 
         with bcol1:
-            st.markdown("### Queue booking")
+            st.markdown("### Queue and book")
             with st.form("queue_booking"):
-                bid_fid = st.text_input("Flight ID to queue", value="")
+                bid_fid = st.text_input("Flight ID", value="")
                 passenger = st.text_input("Passenger name", value="Alice")
-                queued = st.form_submit_button("Queue booking")
+                queued = st.form_submit_button("Queue and process booking")
                 if queued:
-                    ok = queue_booking(bid_fid.strip(), passenger.strip())
+                    fid_clean = bid_fid.strip()
+                    passenger_clean = passenger.strip()
+                    ok = queue_booking(fid_clean, passenger_clean)
                     if ok:
-                        st.success(f"Queued booking for {passenger} on {bid_fid}")
+                        st.session_state.last_booking_fid = fid_clean
+                        placeholder = st.empty()
+                        placeholder.info("Queuing booking...")
+                        time.sleep(0.4)
+                        ok2, msg2 = process_next_booking_noninteractive(passenger_clean)
+                        placeholder.info("Processing booking...")
+                        time.sleep(0.4)
+                        if ok2:
+                            placeholder.success(msg2)
+                        else:
+                            placeholder.error(msg2)
                     else:
                         st.error("Failed to queue booking — flight not found/active.")
 
-        with bcol2:
-            st.markdown("### Process next booking")
-            pname = st.text_input("Passenger name to assign when processing", value="AssignedPassenger")
-            if st.button("Process next booking"):
-                ok, msg = process_next_booking_noninteractive(pname.strip())
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
+            if st.session_state.last_booking_fid:
+                bookings = get_bookings_for_flight(st.session_state.last_booking_fid)
+                if bookings:
+                    st.markdown(f"**Latest bookings for flight {st.session_state.last_booking_fid}**")
+                    st.table([{"BookingId": b[0], "Passenger": b[1]} for b in bookings])
 
         with bcol3:
             st.markdown("### Show bookings for a flight")
-            fid_q = st.text_input("Flight ID to show bookings", value="")
+            fid_q = st.text_input("Flight ID to show bookings", value=st.session_state.get("last_booking_fid", ""))
             if st.button("Show bookings"):
                 bookings = get_bookings_for_flight(fid_q.strip())
                 if not bookings:
