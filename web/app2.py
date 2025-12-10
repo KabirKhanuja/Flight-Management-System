@@ -1,24 +1,17 @@
-# web/app.py
 import streamlit as st
-import os
-import sys
-from pathlib import Path
 from collections import deque, defaultdict
 import heapq
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "python_package"))
-sys.path.insert(0, str(ROOT / "cpp_bindings"))
-
-# keep imports of api/flight_fms for compatibility, but treat them as optional
-try:
-    from flight_fms import api, flight_fms_cpp
-except Exception:
-    api = None
-    flight_fms_cpp = None
-
 st.set_page_config(page_title="Flight Management System (FMS)", layout="wide")
-st.title("Flight Management System")
+
+if "role" not in st.session_state:
+    st.session_state.role = "User"
+
+header_left, header_right = st.columns([3, 1])
+with header_left:
+    st.title("Flight Management System")
+with header_right:
+    st.selectbox("Role", ["User", "Admin"], key="role")
 
 # ---------- Session state init ----------
 if "flights" not in st.session_state:
@@ -37,29 +30,22 @@ if "global_booking_id" not in st.session_state:
 if "recent_searches" not in st.session_state:
     st.session_state.recent_searches = []  # stack-like list, top is end
 if "graph" not in st.session_state:
-    # adjacency: {airport: [(neighbor, dist), ...]}
     st.session_state.graph = defaultdict(list)
-    # initialize graph from flights
-    for f in st.session_state.flights:
-        st.session_state.graph[f["source"]].append((f["destination"], f["distance"]))
-        st.session_state.graph[f["destination"]].append((f["source"], f["distance"]))
 
-# Detect whether non-interactive C++ bindings are available (keeps your UI messaging)
-NONINTERACTIVE = False
-if api is not None:
-    try:
-        NONINTERACTIVE = api.is_noninteractive_ready()
-    except Exception:
-        NONINTERACTIVE = False
-
-if NONINTERACTIVE:
-    st.success("Non-interactive C++ bindings detected. UI will call C++ methods directly.")
-else:
-    st.warning(
-        "Non-interactive C++ bindings not found."
-    )
 
 # ---------- Helper functions ----------
+def rebuild_graph():
+    g = defaultdict(list)
+    for f in st.session_state.flights:
+        if not f["active"]:
+            continue
+        src = f["source"]
+        dst = f["destination"]
+        dist = f["distance"]
+        g[src].append((dst, dist))
+        g[dst].append((src, dist))
+    st.session_state.graph = g
+
 def rebuild_index():
     st.session_state.flight_index = {f["flightID"]: idx for idx, f in enumerate(st.session_state.flights)}
 
@@ -71,13 +57,35 @@ def add_flight_params(fid, src, dst, dist, seats):
     f = {"flightID": fid, "source": src, "destination": dst, "distance": dist, "seats": seats, "active": True, "bookings": []}
     st.session_state.flights.append(f)
     st.session_state.flight_index[fid] = len(st.session_state.flights) - 1
-    # update graph
-    st.session_state.graph[src].append((dst, dist))
-    st.session_state.graph[dst].append((src, dist))
+    rebuild_graph()
     return True, "Added"
 
 def list_flights():
     return st.session_state.flights
+
+
+def cancel_flight(fid):
+    idx = st.session_state.flight_index.get(fid)
+    if idx is None:
+        return False, "Flight not found."
+    f = st.session_state.flights[idx]
+    if not f["active"]:
+        return False, "Flight is already cancelled."
+    f["active"] = False
+    rebuild_graph()
+    return True, f"Flight {fid} cancelled."
+
+
+def schedule_flight(fid):
+    idx = st.session_state.flight_index.get(fid)
+    if idx is None:
+        return False, "Flight not found."
+    f = st.session_state.flights[idx]
+    if f["active"]:
+        return False, "Flight is already active."
+    f["active"] = True
+    rebuild_graph()
+    return True, f"Flight {fid} scheduled / activated."
 
 def queue_booking(fid, passenger):
     idx = st.session_state.flight_index.get(fid)
@@ -138,6 +146,10 @@ def search_flights_by_source_noninteractive(src):
 
 def recent_searches_list():
     return list(reversed(st.session_state.recent_searches))  # top first
+
+
+def list_booking_queue():
+    return list(st.session_state.booking_queue)
 
 # Graph algorithms (Dijkstra, DFS, BFS, Prim, Kruskal)
 def dijkstra_path(src, dest):
@@ -259,169 +271,211 @@ def kruskal_mst():
             total += w
     return mst, total
 
-# ---------- UI: Sidebar ----------
 with st.sidebar:
-    st.header("Status & Actions")
-    if NONINTERACTIVE:
-        st.write("Backend: non-interactive pybind11 extension loaded.")
-    else:
-        st.write("Backend: using Python demo backend.")
-        if st.button("Build extension (scripts/build_extension.sh)"):
-            st.info("Please run `scripts/build_extension.sh` in your terminal if you want to use the C++ backend.")
-    st.markdown("---")
-    st.write("Developer notes:")
-    st.write("- This demo hardcodes sample flights and graph; it mimics the C++ app behaviour.")
-    st.write("- For full production connect to the C++ bindings or implement persistence.")
+    st.header("Dashboard")
+    total_flights = len(st.session_state.flights)
+    active_flights = sum(1 for f in st.session_state.flights if f["active"])
+    total_bookings = sum(len(f["bookings"]) for f in st.session_state.flights)
+    st.metric("Total confirmed bookings", total_bookings)
 
-st.markdown("## Flights")
+role = st.session_state.role
 
-col1, col2 = st.columns([2, 3])
+if role == "Admin":
+    (tab_flights,) = st.tabs(["Flights (Admin)"])
+else:
+    tab_bookings, tab_search, tab_graph = st.tabs([
+        "Bookings (User)",
+        "Search",
+        "Graphs & MST",
+    ])
 
-with col1:
-    st.subheader("Add flight")
-    with st.form("add_flight_form"):
-        fid = st.text_input("Flight ID", value="F104")
-        src = st.text_input("Source", value="Pune")
-        dst = st.text_input("Destination", value="Goa")
-        dist = st.number_input("Distance (km)", min_value=1, value=400)
-        seats = st.number_input("Seats", min_value=1, value=10)
-        submitted = st.form_submit_button("Add flight")
-        if submitted:
-            ok, msg = add_flight_params(fid.strip(), src.strip(), dst.strip(), int(dist), int(seats))
-            if ok:
-                st.success(f"Added flight {fid}")
+if role == "Admin":
+    with tab_flights:
+        st.subheader("Manage flights")
+        col1, col2 = st.columns([2, 3])
+
+        with col1:
+            st.markdown("### Add flight")
+            with st.form("add_flight_form"):
+                fid = st.text_input("Flight ID", value="F104")
+                src = st.text_input("Source", value="Pune")
+                dst = st.text_input("Destination", value="Goa")
+                dist = st.number_input("Distance (km)", min_value=1, value=400)
+                seats = st.number_input("Seats", min_value=1, value=10)
+                submitted = st.form_submit_button("Add flight")
+                if submitted:
+                    ok, msg = add_flight_params(fid.strip(), src.strip(), dst.strip(), int(dist), int(seats))
+                    if ok:
+                        st.success(f"Added flight {fid}")
+                    else:
+                        st.error(msg)
+
+        with col2:
+            st.markdown("### Flights overview")
+            flights = list_flights()
+            if not flights:
+                st.write("No flights added yet.")
             else:
-                st.error(msg)
+                rows = []
+                for f in flights:
+                    rows.append({
+                        "FlightID": f["flightID"],
+                        "Source": f["source"],
+                        "Destination": f["destination"],
+                        "Distance": f["distance"],
+                        "Seats": f["seats"],
+                        "Active": f["active"]
+                    })
+                st.table(rows)
 
-with col2:
-    st.subheader("Active flights")
-    flights = list_flights()
-    if not flights:
-        st.write("No flights added yet.")
-    else:
-        rows = []
-        for f in flights:
-            rows.append({
-                "FlightID": f["flightID"],
-                "Source": f["source"],
-                "Destination": f["destination"],
-                "Distance": f["distance"],
-                "Seats": f["seats"],
-                "Active": f["active"]
-            })
-        st.table(rows)
+        st.markdown("### Change flight status")
+        ccol1, ccol2 = st.columns(2)
+        with ccol1:
+            cfid = st.text_input("Flight ID to cancel", key="cancel_fid")
+            if st.button("Cancel flight", key="cancel_fid_btn"):
+                ok, msg = cancel_flight(cfid.strip())
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+        with ccol2:
+            sfid = st.text_input("Flight ID to schedule / activate", key="schedule_fid")
+            if st.button("Schedule / activate flight", key="schedule_fid_btn"):
+                ok, msg = schedule_flight(sfid.strip())
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
 
-st.markdown("---")
-st.subheader("Booking")
+if role == "User":
+    with tab_bookings:
+        st.subheader("Booking operations")
+        bcol1, bcol2, bcol3 = st.columns(3)
 
-bcol1, bcol2, bcol3 = st.columns(3)
+        with bcol1:
+            st.markdown("### Queue booking")
+            with st.form("queue_booking"):
+                bid_fid = st.text_input("Flight ID to queue", value="")
+                passenger = st.text_input("Passenger name", value="Alice")
+                queued = st.form_submit_button("Queue booking")
+                if queued:
+                    ok = queue_booking(bid_fid.strip(), passenger.strip())
+                    if ok:
+                        st.success(f"Queued booking for {passenger} on {bid_fid}")
+                    else:
+                        st.error("Failed to queue booking — flight not found/active.")
 
-with bcol1:
-    st.markdown("### Queue booking")
-    with st.form("queue_booking"):
-        bid_fid = st.text_input("Flight ID to queue", value="")
-        passenger = st.text_input("Passenger name", value="Alice")
-        queued = st.form_submit_button("Queue booking")
-        if queued:
-            ok = queue_booking(bid_fid.strip(), passenger.strip())
-            if ok:
-                st.success(f"Queued booking for {passenger} on {bid_fid}")
-            else:
-                st.error("Failed to queue booking — flight not found/active.")
+        with bcol2:
+            st.markdown("### Process next booking")
+            pname = st.text_input("Passenger name to assign when processing", value="AssignedPassenger")
+            if st.button("Process next booking"):
+                ok, msg = process_next_booking_noninteractive(pname.strip())
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
 
-with bcol2:
-    st.markdown("### Process next booking (non-interactive)")
-    pname = st.text_input("Passenger name to assign when processing", value="AssignedPassenger")
-    if st.button("Process next booking"):
-        ok, msg = process_next_booking_noninteractive(pname.strip())
-        if ok:
-            st.success(msg)
+        with bcol3:
+            st.markdown("### Show bookings for a flight")
+            fid_q = st.text_input("Flight ID to show bookings", value="")
+            if st.button("Show bookings"):
+                bookings = get_bookings_for_flight(fid_q.strip())
+                if not bookings:
+                    st.write("No bookings.")
+                else:
+                    st.table([{"BookingId": b[0], "Passenger": b[1]} for b in bookings])
+
+            st.markdown("### Cancel booking by ID")
+            cb_fid = st.text_input("Flight ID (cancel)", value="", key="cb_fid")
+            cb_bid = st.number_input("Booking ID", min_value=1, value=1, key="cb_bid")
+            if st.button("Cancel booking", key="cb_btn"):
+                ok = cancel_booking_by_id(cb_fid.strip(), int(cb_bid))
+                if ok:
+                    st.success("Booking cancelled.")
+                else:
+                    st.error("Booking not found for given flight / ID.")
+
+        st.markdown("### Pending booking queue")
+        queue = list_booking_queue()
+        if not queue:
+            st.write("No bookings currently in queue.")
         else:
-            st.error(msg)
+            st.table([{"Position": i + 1, "FlightID": fid} for i, fid in enumerate(queue)])
 
-with bcol3:
-    st.markdown("### Show bookings for a flight")
-    fid_q = st.text_input("Flight ID to show bookings", value="")
-    if st.button("Show bookings"):
-        bookings = get_bookings_for_flight(fid_q.strip())
-        if not bookings:
-            st.write("No bookings.")
-        else:
-            st.table([{"BookingId": b[0], "Passenger": b[1]} for b in bookings])
+    with tab_search:
+        st.subheader("Search flights & recent searches")
+        gcol1, gcol2 = st.columns(2)
+        with gcol1:
+            st.markdown("### Search flights by source")
+            src_q = st.text_input("Source", value="")
+            if st.button("Search by source"):
+                results = search_flights_by_source_noninteractive(src_q.strip())
+                if not results:
+                    st.write("No flights found.")
+                else:
+                    st.table([{"FlightID": f["flightID"], "To": f["destination"], "Distance": f["distance"], "Seats": f["seats"]} for f in results])
 
-st.markdown("---")
-st.subheader("Searches & Graphs")
+        with gcol2:
+            st.markdown("### Recent searches")
+            if st.button("Show recent searches"):
+                rs = recent_searches_list()
+                if not rs:
+                    st.write("No recent searches.")
+                else:
+                    st.write(", ".join(rs))
 
-gcol1, gcol2 = st.columns(2)
-with gcol1:
-    st.markdown("### Search flights by source")
-    src_q = st.text_input("Source", value="")
-    if st.button("Search by source"):
-        results = search_flights_by_source_noninteractive(src_q.strip())
-        if not results:
-            st.write("No flights found.")
-        else:
-            st.table([{"FlightID": f["flightID"], "To": f["destination"], "Distance": f["distance"], "Seats": f["seats"]} for f in results])
+    with tab_graph:
+        st.subheader("Graph algorithms")
+        gcol1, gcol2 = st.columns(2)
 
-    if st.button("Show recent searches"):
-        rs = recent_searches_list()
-        if not rs:
-            st.write("No recent searches.")
-        else:
-            st.write(", ".join(rs))
+        with gcol1:
+            st.markdown("### Shortest path (Dijkstra)")
+            src = st.text_input("Source airport", value="")
+            dst = st.text_input("Destination airport", value="")
+            if st.button("Find shortest path"):
+                dist, path = dijkstra_path(src.strip(), dst.strip())
+                if dist is None:
+                    st.error("No path found or airports not in graph.")
+                else:
+                    st.success(f"Distance = {dist}")
+                    st.write("Path: " + " -> ".join(path))
 
-with gcol2:
-    st.markdown("### Shortest path (Dijkstra)")
-    src = st.text_input("Source airport (for Dijkstra)", value="")
-    dst = st.text_input("Destination airport (for Dijkstra)", value="")
-    if st.button("Find shortest path"):
-        dist, path = dijkstra_path(src.strip(), dst.strip())
-        if dist is None:
-            st.error("No path found or airports not in graph.")
-        else:
-            st.success(f"Distance = {dist}")
-            st.write("Path: " + " -> ".join(path))
+            st.markdown("### DFS / BFS")
+            dfs_start = st.text_input("DFS start", value="")
+            bfs_start = st.text_input("BFS start", value="")
+            if st.button("Run DFS"):
+                order = dfs(dfs_start.strip())
+                if not order:
+                    st.error("Start airport not in graph.")
+                else:
+                    st.write("DFS order: " + " -> ".join(order))
+            if st.button("Run BFS"):
+                order = bfs(bfs_start.strip())
+                if not order:
+                    st.error("Start airport not in graph.")
+                else:
+                    st.write("BFS order: " + " -> ".join(order))
 
-    st.markdown("### DFS / BFS")
-    dfs_start = st.text_input("DFS start", value="")
-    bfs_start = st.text_input("BFS start", value="")
-    if st.button("Run DFS"):
-        order = dfs(dfs_start.strip())
-        if not order:
-            st.error("Start airport not in graph.")
-        else:
-            st.write("DFS order: " + " -> ".join(order))
-    if st.button("Run BFS"):
-        order = bfs(bfs_start.strip())
-        if not order:
-            st.error("Start airport not in graph.")
-        else:
-            st.write("BFS order: " + " -> ".join(order))
+        with gcol2:
+            st.markdown("### MST (Prim / Kruskal)")
+            prim_start = st.text_input("Prim start", value="")
+            if st.button("Prim MST"):
+                edges, total = prim_mst(prim_start.strip())
+                if not edges:
+                    st.error("Prim start not in graph or not enough nodes.")
+                else:
+                    st.write("Edges:")
+                    for u, v, w in edges:
+                        st.write(f"{u} - {v} ({w})")
+                    st.write(f"Total MST weight = {total}")
+            if st.button("Kruskal MST"):
+                edges, total = kruskal_mst()
+                if not edges:
+                    st.error("Not enough nodes for MST.")
+                else:
+                    st.write("Edges:")
+                    for u, v, w in edges:
+                        st.write(f"{u} - {v} ({w})")
+                st.write(f"Total MST weight = {total}")
 
-    st.markdown("### MST (Prim / Kruskal)")
-    prim_start = st.text_input("Prim start", value="")
-    if st.button("Prim MST"):
-        edges, total = prim_mst(prim_start.strip())
-        if not edges:
-            st.error("Prim start not in graph or not enough nodes.")
-        else:
-            st.write("Edges:")
-            for u,v,w in edges:
-                st.write(f"{u} - {v} ({w})")
-            st.write(f"Total MST weight = {total}")
-    if st.button("Kruskal MST"):
-        edges, total = kruskal_mst()
-        if not edges:
-            st.error("Not enough nodes for MST.")
-        else:
-            st.write("Edges:")
-            for u,v,w in edges:
-                st.write(f"{u} - {v} ({w})")
-            st.write(f"Total MST weight = {total}")
-
-st.markdown("---")
-st.subheader("Developer / CLI fallback")
-if st.button("Show CLI run instructions"):
-    st.code("cd cpp && mkdir build && cd build && cmake .. && make && ../fms_app")
-
-st.markdown("----")
+rebuild_graph()
