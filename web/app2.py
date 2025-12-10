@@ -59,7 +59,6 @@ def save_flights_to_db():
         f.write("\n".join(lines))
 
 
-# ---------- Session state init ----------
 if "flights" not in st.session_state:
     loaded = load_flights_from_db()
     if loaded:
@@ -409,7 +408,7 @@ if role == "Admin":
 if role == "User":
     with tab_bookings:
         st.subheader("Booking operations")
-        bcol1, bcol2, bcol3 = st.columns(3)
+        bcol1, bcol2 = st.columns(2)
 
         with bcol1:
             st.markdown("### Queue and book")
@@ -442,7 +441,7 @@ if role == "User":
                     st.markdown(f"**Latest bookings for flight {st.session_state.last_booking_fid}**")
                     st.table([{"BookingId": b[0], "Passenger": b[1]} for b in bookings])
 
-        with bcol3:
+        with bcol2:
             st.markdown("### Show bookings for a flight")
             fid_q = st.text_input("Flight ID to show bookings", value=st.session_state.get("last_booking_fid", ""))
             if st.button("Show bookings"):
@@ -452,10 +451,11 @@ if role == "User":
                 else:
                     st.table([{"BookingId": b[0], "Passenger": b[1]} for b in bookings])
 
-            st.markdown("### Cancel booking by ID")
+            st.markdown('<h4 style="color: #ff4b4b;">Cancel booking</h4>', unsafe_allow_html=True)
             cb_fid = st.text_input("Flight ID (cancel)", value="", key="cb_fid")
             cb_bid = st.number_input("Booking ID", min_value=1, value=1, key="cb_bid")
-            if st.button("Cancel booking", key="cb_btn"):
+            cancel_clicked = st.button("Cancel booking", key="cb_btn")
+            if cancel_clicked:
                 ok = cancel_booking_by_id(cb_fid.strip(), int(cb_bid))
                 if ok:
                     st.success("Booking cancelled.")
