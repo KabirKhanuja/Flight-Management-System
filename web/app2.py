@@ -1,0 +1,429 @@
+# web/app.py
+import streamlit as st
+import os
+import sys
+from pathlib import Path
+from collections import deque, defaultdict
+import heapq
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "python_package"))
+sys.path.insert(0, str(ROOT / "cpp_bindings"))
+
+# keep imports of api/flight_fms for compatibility, but treat them as optional
+try:
+    from flight_fms import api, flight_fms_cpp
+except Exception:
+    api = None
+    flight_fms_cpp = None
+
+st.set_page_config(page_title="Flight Management System (FMS)", layout="wide")
+st.title("Flight Management System — Streamlit UI (Python demo)")
+
+# ---------- Session state init ----------
+if "flights" not in st.session_state:
+    # flights: list of dicts {flightID, source, destination, distance, seats, active, bookings(list of (id,name))}
+    st.session_state.flights = [
+        {"flightID": "F101", "source": "Pune", "destination": "Mumbai", "distance": 150, "seats": 5, "active": True, "bookings": []},
+        {"flightID": "F102", "source": "Delhi", "destination": "Mumbai", "distance": 1400, "seats": 3, "active": True, "bookings": []},
+        {"flightID": "F103", "source": "Pune", "destination": "Bangalore", "distance": 840, "seats": 2, "active": True, "bookings": []},
+    ]
+if "flight_index" not in st.session_state:
+    st.session_state.flight_index = {f["flightID"]: idx for idx, f in enumerate(st.session_state.flights)}
+if "booking_queue" not in st.session_state:
+    st.session_state.booking_queue = deque()  # store flightID entries
+if "global_booking_id" not in st.session_state:
+    st.session_state.global_booking_id = 1
+if "recent_searches" not in st.session_state:
+    st.session_state.recent_searches = []  # stack-like list, top is end
+if "graph" not in st.session_state:
+    # adjacency: {airport: [(neighbor, dist), ...]}
+    st.session_state.graph = defaultdict(list)
+    # initialize graph from flights
+    for f in st.session_state.flights:
+        st.session_state.graph[f["source"]].append((f["destination"], f["distance"]))
+        st.session_state.graph[f["destination"]].append((f["source"], f["distance"]))
+
+# Detect whether non-interactive C++ bindings are available (keeps your UI messaging)
+NONINTERACTIVE = False
+if api is not None:
+    try:
+        NONINTERACTIVE = api.is_noninteractive_ready()
+    except Exception:
+        NONINTERACTIVE = False
+
+if NONINTERACTIVE:
+    st.success("Non-interactive C++ bindings detected. UI will call C++ methods directly.")
+else:
+    st.warning(
+        "Non-interactive C++ bindings not found. The UI will use the Python demo backend (hardcoded/sample data)."
+    )
+
+# ---------- Helper functions ----------
+def rebuild_index():
+    st.session_state.flight_index = {f["flightID"]: idx for idx, f in enumerate(st.session_state.flights)}
+
+def add_flight_params(fid, src, dst, dist, seats):
+    if fid in st.session_state.flight_index:
+        return False, "Flight ID already exists."
+    if len(st.session_state.flights) >= 100:
+        return False, "Max flights reached."
+    f = {"flightID": fid, "source": src, "destination": dst, "distance": dist, "seats": seats, "active": True, "bookings": []}
+    st.session_state.flights.append(f)
+    st.session_state.flight_index[fid] = len(st.session_state.flights) - 1
+    # update graph
+    st.session_state.graph[src].append((dst, dist))
+    st.session_state.graph[dst].append((src, dist))
+    return True, "Added"
+
+def list_flights():
+    return st.session_state.flights
+
+def queue_booking(fid, passenger):
+    idx = st.session_state.flight_index.get(fid)
+    if idx is None:
+        return False
+    f = st.session_state.flights[idx]
+    if not f["active"]:
+        return False
+    st.session_state.booking_queue.append(fid)
+    return True
+
+def process_next_booking_noninteractive(passenger_name):
+    if not st.session_state.booking_queue:
+        return False, "No bookings in queue."
+    fid = st.session_state.booking_queue.popleft()
+    idx = st.session_state.flight_index.get(fid)
+    if idx is None:
+        return False, f"Flight {fid} not found."
+    f = st.session_state.flights[idx]
+    if not f["active"]:
+        return False, f"Flight {fid} is cancelled."
+    if f["seats"] <= 0:
+        return False, f"No seats left on {fid}."
+    # assign booking
+    bid = st.session_state.global_booking_id
+    st.session_state.global_booking_id += 1
+    f["bookings"].append((bid, passenger_name))
+    f["seats"] -= 1
+    return True, f"Booking confirmed for {passenger_name} on {fid}, booking id {bid}."
+
+def get_bookings_for_flight(fid):
+    idx = st.session_state.flight_index.get(fid)
+    if idx is None:
+        return []
+    return st.session_state.flights[idx]["bookings"]
+
+def cancel_booking_by_id(fid, booking_id):
+    idx = st.session_state.flight_index.get(fid)
+    if idx is None:
+        return False
+    f = st.session_state.flights[idx]
+    for i, (bid, name) in enumerate(f["bookings"]):
+        if bid == booking_id:
+            f["bookings"].pop(i)
+            f["seats"] += 1
+            return True
+    return False
+
+def search_flights_by_source_noninteractive(src):
+    res = []
+    for f in st.session_state.flights:
+        if f["source"] == src and f["active"]:
+            res.append(f)
+    # push to recent searches
+    if src:
+        st.session_state.recent_searches.append(src)
+    return res
+
+def recent_searches_list():
+    return list(reversed(st.session_state.recent_searches))  # top first
+
+# Graph algorithms (Dijkstra, DFS, BFS, Prim, Kruskal)
+def dijkstra_path(src, dest):
+    graph = st.session_state.graph
+    if src not in graph or dest not in graph:
+        return None, []
+    # standard Dijkstra
+    pq = [(0, src)]
+    dist = {src: 0}
+    parent = {src: None}
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d != dist[u]:
+            continue
+        if u == dest:
+            break
+        for v, w in graph[u]:
+            nd = d + w
+            if v not in dist or nd < dist[v]:
+                dist[v] = nd
+                parent[v] = u
+                heapq.heappush(pq, (nd, v))
+    if dest not in dist:
+        return None, []
+    # reconstruct path
+    path = []
+    cur = dest
+    while cur is not None:
+        path.append(cur)
+        cur = parent[cur]
+    path.reverse()
+    return dist[dest], path
+
+def dfs(start):
+    graph = st.session_state.graph
+    visited = set()
+    order = []
+    def _dfs(u):
+        visited.add(u)
+        order.append(u)
+        for v, _ in graph[u]:
+            if v not in visited:
+                _dfs(v)
+    if start not in graph:
+        return []
+    _dfs(start)
+    return order
+
+def bfs(start):
+    graph = st.session_state.graph
+    if start not in graph:
+        return []
+    q = deque([start])
+    visited = {start}
+    order = []
+    while q:
+        u = q.popleft()
+        order.append(u)
+        for v, _ in graph[u]:
+            if v not in visited:
+                visited.add(v)
+                q.append(v)
+    return order
+
+def prim_mst(start):
+    graph = st.session_state.graph
+    if start not in graph:
+        return [], 0
+    visited = set([start])
+    edges = []
+    total = 0
+    pq = []
+    for v, w in graph[start]:
+        heapq.heappush(pq, (w, start, v))
+    while pq:
+        w, u, v = heapq.heappop(pq)
+        if v in visited:
+            continue
+        visited.add(v)
+        edges.append((u, v, w))
+        total += w
+        for nx, nw in graph[v]:
+            if nx not in visited:
+                heapq.heappush(pq, (nw, v, nx))
+    return edges, total
+
+def kruskal_mst():
+    # build edges unique u<v
+    graph = st.session_state.graph
+    nodes = list(graph.keys())
+    idx = {n:i for i,n in enumerate(nodes)}
+    edges = []
+    for u in graph:
+        for v,w in graph[u]:
+            if idx[u] < idx[v]:
+                edges.append((w, u, v))
+    edges.sort()
+    parent = {n:n for n in nodes}
+    rank = {n:0 for n in nodes}
+    def find(x):
+        while parent[x]!=x:
+            parent[x]=parent[parent[x]]
+            x=parent[x]
+        return x
+    def union(a,b):
+        ra, rb = find(a), find(b)
+        if ra==rb: return False
+        if rank[ra]<rank[rb]:
+            parent[ra]=rb
+        else:
+            parent[rb]=ra
+            if rank[ra]==rank[rb]: rank[ra]+=1
+        return True
+    mst = []
+    total = 0
+    for w,u,v in edges:
+        if union(u,v):
+            mst.append((u,v,w))
+            total += w
+    return mst, total
+
+# ---------- UI: Sidebar ----------
+with st.sidebar:
+    st.header("Status & Actions")
+    if NONINTERACTIVE:
+        st.write("Backend: non-interactive pybind11 extension loaded.")
+    else:
+        st.write("Backend: using Python demo backend.")
+        if st.button("Build extension (scripts/build_extension.sh)"):
+            st.info("Please run `scripts/build_extension.sh` in your terminal if you want to use the C++ backend.")
+    st.markdown("---")
+    st.write("Developer notes:")
+    st.write("- This demo hardcodes sample flights and graph; it mimics the C++ app behaviour.")
+    st.write("- For full production connect to the C++ bindings or implement persistence.")
+
+st.markdown("## Flights")
+
+col1, col2 = st.columns([2, 3])
+
+with col1:
+    st.subheader("Add flight (demo)")
+    with st.form("add_flight_form"):
+        fid = st.text_input("Flight ID", value="F104")
+        src = st.text_input("Source", value="Pune")
+        dst = st.text_input("Destination", value="Goa")
+        dist = st.number_input("Distance (km)", min_value=1, value=400)
+        seats = st.number_input("Seats", min_value=1, value=10)
+        submitted = st.form_submit_button("Add flight")
+        if submitted:
+            ok, msg = add_flight_params(fid.strip(), src.strip(), dst.strip(), int(dist), int(seats))
+            if ok:
+                st.success(f"Added flight {fid}")
+            else:
+                st.error(msg)
+
+with col2:
+    st.subheader("Active flights")
+    flights = list_flights()
+    if not flights:
+        st.write("No flights added yet.")
+    else:
+        rows = []
+        for f in flights:
+            rows.append({
+                "FlightID": f["flightID"],
+                "Source": f["source"],
+                "Destination": f["destination"],
+                "Distance": f["distance"],
+                "Seats": f["seats"],
+                "Active": f["active"]
+            })
+        st.table(rows)
+
+st.markdown("---")
+st.subheader("Booking")
+
+bcol1, bcol2, bcol3 = st.columns(3)
+
+with bcol1:
+    st.markdown("### Queue booking")
+    with st.form("queue_booking"):
+        bid_fid = st.text_input("Flight ID to queue", value="")
+        passenger = st.text_input("Passenger name", value="Alice")
+        queued = st.form_submit_button("Queue booking")
+        if queued:
+            ok = queue_booking(bid_fid.strip(), passenger.strip())
+            if ok:
+                st.success(f"Queued booking for {passenger} on {bid_fid}")
+            else:
+                st.error("Failed to queue booking — flight not found/active.")
+
+with bcol2:
+    st.markdown("### Process next booking (non-interactive)")
+    pname = st.text_input("Passenger name to assign when processing", value="AssignedPassenger")
+    if st.button("Process next booking"):
+        ok, msg = process_next_booking_noninteractive(pname.strip())
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
+
+with bcol3:
+    st.markdown("### Show bookings for a flight")
+    fid_q = st.text_input("Flight ID to show bookings", value="")
+    if st.button("Show bookings"):
+        bookings = get_bookings_for_flight(fid_q.strip())
+        if not bookings:
+            st.write("No bookings.")
+        else:
+            st.table([{"BookingId": b[0], "Passenger": b[1]} for b in bookings])
+
+st.markdown("---")
+st.subheader("Searches & Graphs")
+
+gcol1, gcol2 = st.columns(2)
+with gcol1:
+    st.markdown("### Search flights by source")
+    src_q = st.text_input("Source", value="")
+    if st.button("Search by source"):
+        results = search_flights_by_source_noninteractive(src_q.strip())
+        if not results:
+            st.write("No flights found.")
+        else:
+            st.table([{"FlightID": f["flightID"], "To": f["destination"], "Distance": f["distance"], "Seats": f["seats"]} for f in results])
+
+    if st.button("Show recent searches"):
+        rs = recent_searches_list()
+        if not rs:
+            st.write("No recent searches.")
+        else:
+            st.write(", ".join(rs))
+
+with gcol2:
+    st.markdown("### Shortest path (Dijkstra)")
+    src = st.text_input("Source airport (for Dijkstra)", value="")
+    dst = st.text_input("Destination airport (for Dijkstra)", value="")
+    if st.button("Find shortest path"):
+        dist, path = dijkstra_path(src.strip(), dst.strip())
+        if dist is None:
+            st.error("No path found or airports not in graph.")
+        else:
+            st.success(f"Distance = {dist}")
+            st.write("Path: " + " -> ".join(path))
+
+    st.markdown("### DFS / BFS")
+    dfs_start = st.text_input("DFS start", value="")
+    bfs_start = st.text_input("BFS start", value="")
+    if st.button("Run DFS"):
+        order = dfs(dfs_start.strip())
+        if not order:
+            st.error("Start airport not in graph.")
+        else:
+            st.write("DFS order: " + " -> ".join(order))
+    if st.button("Run BFS"):
+        order = bfs(bfs_start.strip())
+        if not order:
+            st.error("Start airport not in graph.")
+        else:
+            st.write("BFS order: " + " -> ".join(order))
+
+    st.markdown("### MST (Prim / Kruskal)")
+    prim_start = st.text_input("Prim start", value="")
+    if st.button("Prim MST"):
+        edges, total = prim_mst(prim_start.strip())
+        if not edges:
+            st.error("Prim start not in graph or not enough nodes.")
+        else:
+            st.write("Edges:")
+            for u,v,w in edges:
+                st.write(f"{u} - {v} ({w})")
+            st.write(f"Total MST weight = {total}")
+    if st.button("Kruskal MST"):
+        edges, total = kruskal_mst()
+        if not edges:
+            st.error("Not enough nodes for MST.")
+        else:
+            st.write("Edges:")
+            for u,v,w in edges:
+                st.write(f"{u} - {v} ({w})")
+            st.write(f"Total MST weight = {total}")
+
+st.markdown("---")
+st.subheader("Developer / CLI fallback")
+st.write("This demo uses in-memory state. To use the real C++ backend, implement non-interactive bindings and rebuild the extension.")
+if st.button("Show CLI run instructions"):
+    st.code("cd cpp && mkdir build && cd build && cmake .. && make && ../fms_app")
+
+st.markdown("----")
+st.caption("Streamlit demo — mimics the C++ Flight Management System behavior with hardcoded/sample data.")
